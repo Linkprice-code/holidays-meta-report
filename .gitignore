@@ -1,0 +1,7 @@
+# data/ 는 암호화된 .enc 파일과 key.json 만 올린다 (원본은 절대 커밋하지 않음)
+data/*
+!data/key.json
+!data/*.enc
+!data/creatives/
+data/creatives/*
+!data/creatives/*.enc
