@@ -143,7 +143,7 @@
   </div>
   <p class="note foot">
     협력광고 계정<span class="badge">협력</span>의 구매·장바구니·전환값은 광고관리자의 <b>공유 항목 포함</b> 기준이고, 자사몰 계정은 픽셀 기준 일반 구매 지표입니다.
-    증감은 선택 기간과 같은 길이의 직전 기간과 비교합니다. 행사명과 일반/키즈는 캠페인명에서 읽어오고, 이름에 일반·키즈가 없으면 '기타'로 묶입니다.
+    증감은 선택 기간과 같은 길이의 직전 기간과 비교합니다. 행사명은 캠페인명에서 읽어옵니다.
     소재는 같은 이미지·영상을 쓴 광고끼리 합산하며, ROAS 순위는 최소 지출 조건을 넘는 소재만 포함합니다.
   </p>
 </div>
@@ -312,7 +312,7 @@ function creativeBlock(id, accId, group, since, until) {
 }
 
 /* ---------- 렌더 ---------- */
-const SECTIONS = [["summary", "요약"], ["event", "행사명별"], ["seg", "일반·키즈별"], ["audience", "타겟·노출"], ["creative", "소재 성과"], ["products", "제품별"], ["campaign", "캠페인별"], ["adset", "광고세트별"]];
+const SECTIONS = [["summary", "요약"], ["event", "행사명별"], ["audience", "타겟·노출"], ["creative", "소재 성과"], ["products", "제품별"], ["campaign", "캠페인별"], ["adset", "광고세트별"]];
 let SECTION = "summary";
 const GROUP = {};
 const ADSET_CAMP = {};
@@ -490,7 +490,6 @@ function render() {
   const prev = DATA.rows.filter(r => between(r, pSince, pUntil) && inScope(r, ACCOUNT, g));
   const accOf = r => ACC[r.account_id];
   const evKey = r => parseName(r.campaign_name, accOf(r)).event;
-  const segKey = r => parseName(r.campaign_name, accOf(r)).seg;
   const cmp = `<small>비교: ${pSince} ~ ${pUntil}</small>`;
   const scopeName = (acc ? acc.name : "전체 계정") + (g ? ` · ${g}` : "");
   let html = "";
@@ -512,9 +511,6 @@ function render() {
     }
   } else if (SECTION === "event") {
     html += `<div class="card"><h2>행사명별 성과 <small>${esc(scopeName)} · 비교 ${pSince} ~ ${pUntil}</small></h2><div class="table-wrap">${breakdownTable("ev_" + ACCOUNT + g, cur, prev, evKey, { label: "행사명", bar: true, total: true })}</div></div>`;
-  } else if (SECTION === "seg") {
-    html += `<div class="card"><h2>일반 / 키즈별 성과 <small>${esc(scopeName)} · 비교 ${pSince} ~ ${pUntil}</small></h2><div class="table-wrap">${breakdownTable("seg_" + ACCOUNT + g, cur, prev, segKey, { label: "구분", bar: true, total: true })}</div></div>`;
-    html += `<div class="card"><h2>행사명 × 일반/키즈 <small>행사별로 일반·키즈 성과를 함께 비교</small></h2><div class="table-wrap">${breakdownTable("evseg_" + ACCOUNT + g, cur, prev, r => evKey(r) + " · " + segKey(r), { label: "행사 · 구분", bar: true })}</div></div>`;
   } else if (SECTION === "audience") {
     html += audienceSection(acc, g, since, until, pSince, pUntil, scopeName);
   } else if (SECTION === "creative") {
@@ -536,12 +532,12 @@ function render() {
       <div class="table-wrap">${breakdownTable("adset_" + ACCOUNT + g, c2, p2, r => r.adset_id, {
         label: "광고세트", total: true, bar: true,
         labelFn: r => r.adset_name || r.adset_id,
-        subFn: r => { const p = parseName(r.campaign_name, accOf(r)); return `<div class="note">${acc ? "" : esc(accOf(r)?.name) + " · "}${esc(r.campaign_name)}<br>${esc(p.event)} · ${p.seg}</div>`; },
+        subFn: r => { const p = parseName(r.campaign_name, accOf(r)); return `<div class="note">${acc ? "" : esc(accOf(r)?.name) + " · "}${esc(r.campaign_name)}<br>${esc(p.event)}</div>`; },
       })}</div></div>`;
   } else if (SECTION === "campaign") {
     html += `<div class="card"><h2>캠페인별 성과 <small>${esc(scopeName)} · 열 제목을 누르면 정렬</small></h2><div class="table-wrap">${breakdownTable("camp_" + ACCOUNT + g, cur, prev, r => r.campaign_name, {
       label: "캠페인", total: true,
-      subFn: r => { const p = parseName(r.campaign_name, accOf(r)); return `<div class="note">${acc ? "" : esc(accOf(r)?.name) + (r.account_type === "collab" ? '<span class="badge">협력</span>' : "") + " · "}${esc(p.event)} · ${p.seg}</div>`; },
+      subFn: r => { const p = parseName(r.campaign_name, accOf(r)); return `<div class="note">${acc ? "" : esc(accOf(r)?.name) + (r.account_type === "collab" ? '<span class="badge">협력</span>' : "") + " · "}${esc(p.event)}</div>`; },
     })}</div></div>`;
   }
 
@@ -645,7 +641,7 @@ function downloadCsv() {
     return;
   }
   const rows = DATA.rows.filter(r => between(r, since, until) && inScope(r, ACCOUNT, g));
-  const cols = ["date", "account_name", "account_type", "campaign_name", "event", "segment", "group", "adset_name", "spend", "impressions", "reach", "clicks", "link_clicks", "view_content", "add_to_cart", "purchases", "purchase_value"];
+  const cols = ["date", "account_name", "account_type", "campaign_name", "event", "group", "adset_name", "spend", "impressions", "reach", "clicks", "link_clicks", "view_content", "add_to_cart", "purchases", "purchase_value"];
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const lines = rows.map(r => {
     const acc = ACC[r.account_id], p = parseName(r.campaign_name, acc);
