@@ -16,7 +16,7 @@
 // IV 는 HMAC(경로 + 내용)으로 정해서, 내용이 같으면 암호문도 같다 → 안 바뀐 파일은 커밋되지 않음
 
 import { createCipheriv, createDecipheriv, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -101,7 +101,13 @@ if (mode === "decrypt") {
     writeFileSync(encPath, out);
     n++;
   }
-  console.log(`암호화 완료: 새로 쓴 파일 ${n}개, 변경 없음 ${same}개`);
+  // 수집 스크립트가 지운 파일(예: 제품별 사용 안 함)은 암호화본도 지운다.
+  // decrypt 단계에서 모든 .enc 를 원본으로 풀어두므로, 원본이 없는 .enc 는 일부러 지운 것뿐이다
+  let removed = 0;
+  for (const p of walk(DATA).filter(p => p.endsWith(".enc"))) {
+    if (!existsSync(p.slice(0, -4))) { unlinkSync(p); removed++; }
+  }
+  console.log(`암호화 완료: 새로 쓴 파일 ${n}개, 변경 없음 ${same}개, 삭제 ${removed}개`);
 } else {
   console.error("사용법: node scripts/crypt.mjs encrypt|decrypt");
   process.exit(1);

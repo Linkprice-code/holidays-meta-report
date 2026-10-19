@@ -597,11 +597,20 @@ def main():
     except Exception as e:  # 부가 데이터라 실패해도 성과 데이터는 저장
         print(f"분석 축 수집 중 오류 (성과 데이터는 저장됨): {e}")
 
-    print("- 카탈로그 제품별 수집")
-    try:
-        collect_products(ok_accounts, since, until)
-    except Exception as e:  # 부가 데이터라 실패해도 성과 데이터는 저장
-        print(f"제품별 수집 중 오류 (성과 데이터는 저장됨): {e}")
+    # accounts.json 에서 "products": false 인 계정은 제품별을 받지 않는다
+    # (협력광고는 공유 카탈로그의 다른 브랜드 상품이 섞여 나올 수 있음)
+    prod_accounts = [a for a in ok_accounts if a.get("products", True)]
+    if prod_accounts:
+        print("- 카탈로그 제품별 수집")
+        try:
+            collect_products(prod_accounts, since, until)
+        except Exception as e:  # 부가 데이터라 실패해도 성과 데이터는 저장
+            print(f"제품별 수집 중 오류 (성과 데이터는 저장됨): {e}")
+    elif not any(a.get("products", True) for a in config["accounts"]):
+        # 제품별을 쓰는 계정이 하나도 없으면 예전에 받은 제품 데이터도 지운다
+        for name in ("products.json", "products_debug.json"):
+            (DATA_DIR / name).unlink(missing_ok=True)
+        print("- 카탈로그 제품별: 사용 안 함 (accounts.json products=false)")
 
     try:
         update_creatives(ad_ids)
