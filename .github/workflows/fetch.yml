@@ -72,6 +72,8 @@ jobs:
             # .gitignore 가 없어도 원본이 올라가지 않도록 암호화 파일만 골라서 추가
             [ -f data/key.json ] && git add -- data/key.json
             [ -d data ] && find data -name '*.enc' -print0 | xargs -0 -r git add --
+            # 지워진 .enc 도 반영 (추적 중인 파일은 .enc 와 key.json 뿐이라 원본이 섞일 일 없음)
+            [ -d data ] && git add -u -- data
             if git diff --cached --quiet; then
               echo "변경 없음"; exit 0
             fi
