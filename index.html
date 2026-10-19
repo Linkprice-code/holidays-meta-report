@@ -473,7 +473,10 @@ function render() {
 
   // 섹션 버튼
   const secBox = document.getElementById("sections");
-  secBox.innerHTML = SECTIONS.map(([k, l]) => `<button class="sec${k === SECTION ? " on" : ""}" data-sec="${k}">${l}</button>`).join("");
+  // accounts.json 에서 모든 계정이 "products": false 면 제품별 탭을 숨긴다
+  const hasProducts = Object.values(ACC).some(a => a.products !== false);
+  if (SECTION === "products" && !hasProducts) SECTION = "summary";
+  secBox.innerHTML = SECTIONS.filter(([k]) => k !== "products" || hasProducts).map(([k, l]) => `<button class="sec${k === SECTION ? " on" : ""}" data-sec="${k}">${l}</button>`).join("");
   secBox.querySelectorAll(".sec").forEach(b => b.onclick = () => { SECTION = b.dataset.sec; render(); });
 
   // 그룹 버튼 (요약 화면에서는 두 그룹을 나란히 보여주므로 숨김)
