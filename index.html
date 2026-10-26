@@ -99,6 +99,16 @@
   .lock button { width: 100%; margin-top: 10px; padding: 10px; background: var(--accent); color: #fff; border: none; font-weight: 700; }
   .lock button:disabled { opacity: .6; cursor: wait; }
   .lock .err { color: var(--down); font-size: 12px; min-height: 18px; margin-top: 8px; }
+  /* HTML 보고서 만들기 전 코멘트 입력창 */
+  .rdlg { position: fixed; inset: 0; z-index: 40; background: rgba(20,33,61,.45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .rdlg[hidden] { display: none; }
+  .rbox { background: var(--card); border-radius: 16px; width: 100%; max-width: 560px; padding: 22px 22px 18px; box-shadow: 0 16px 48px rgba(20,33,61,.3); }
+  .rbox h2 { margin: 0 0 4px; font-size: 18px; }
+  .rbox p { margin: 0 0 14px; }
+  .rbox label span { color: var(--muted); font-weight: 400; }
+  .rbox textarea { width: 100%; min-height: 160px; margin-top: 6px; font: inherit; font-size: 14px; line-height: 1.6; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; resize: vertical; }
+  .rbox .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  .rbox .primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
   /* 담당자 코멘트 (대시보드 바로 아래) */
   .cmt { background: var(--card); border-radius: 16px; box-shadow: 0 6px 24px rgba(37,99,235,.08); margin-top: 16px; padding: 18px 20px; }
   .cmt h2 { font-size: 15px; margin: 0 0 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -159,6 +169,18 @@
     <div id="content"></div>
   </div>
   <section class="cmt" id="comments" aria-label="담당자 코멘트"></section>
+  <div class="rdlg" id="reportDlg" hidden>
+    <form class="rbox" id="reportForm" role="dialog" aria-modal="true" aria-labelledby="reportDlgTitle">
+      <h2 id="reportDlgTitle">HTML 보고서 만들기</h2>
+      <p class="note" id="reportDlgScope"></p>
+      <label class="note" for="reportCmt">담당자 코멘트 <span>(보고서에만 들어갑니다 · 비워두면 코멘트 없이 만듭니다)</span></label>
+      <textarea id="reportCmt" placeholder="예) 넾다세일 소재 투입 후 CTR 상승, 다음 주 예산 증액 검토"></textarea>
+      <div class="row">
+        <button type="button" id="reportCancel">취소</button>
+        <button type="submit" class="primary" id="reportGo">보고서 만들기</button>
+      </div>
+    </form>
+  </div>
   <p class="note foot">
     협력광고 계정<span class="badge">협력</span>의 구매·장바구니·전환값은 광고관리자의 <b>공유 항목 포함</b> 기준이고, 자사몰 계정은 픽셀 기준 일반 구매 지표입니다.
     증감은 선택 기간과 같은 길이의 직전 기간과 비교합니다. 행사명은 캠페인명에서 읽어옵니다.
@@ -589,7 +611,27 @@ function render() {
 /* ---------- HTML 보고서 내보내기 ----------
    지금 선택한 기간·계정 기준으로 데이터와 소재 썸네일을 담은 HTML 파일 하나를 만든다 (AD-Dashboard 보고서와 같은 방식).
    받은 파일은 비밀번호 없이 열리므로 광고주에게 그대로 보낼 수 있다 */
-async function exportHtmlReport() {
+// 보고서 버튼 → 코멘트 입력창. 링크용으로 등록된 코멘트가 있으면 미리 채워 두고 여기서 고칠 수 있다
+function openReportDialog() {
+  const { since, until } = range();
+  const scope = ACCOUNT === "all" ? "전체 계정" : (ACC[ACCOUNT]?.name || ACCOUNT);
+  const saved = COMMENTS.entries
+    .filter(e => (e.account === ACCOUNT || e.account === "all") && e.since <= until && e.until >= since)
+    .sort((a, b) => b.since.localeCompare(a.since));
+  const dlg = document.getElementById("reportDlg"), ta = document.getElementById("reportCmt");
+  document.getElementById("reportDlgScope").textContent = `${since} ~ ${until} · ${scope} 기준으로 만듭니다.`;
+  ta.value = saved.map(e => saved.length > 1 ? `[${e.since} ~ ${e.until}]\n${e.text}` : e.text).join("\n\n");
+  dlg.hidden = false;
+  ta.focus();
+  const close = () => { dlg.hidden = true; document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  document.getElementById("reportCancel").onclick = close;
+  dlg.onclick = e => { if (e.target === dlg) close(); };
+  document.getElementById("reportForm").onsubmit = e => { e.preventDefault(); const text = ta.value.trim(); close(); exportHtmlReport(text); };
+}
+
+async function exportHtmlReport(commentText) {
   const btn = document.getElementById("htmlReport");
   const label = btn.textContent;
   btn.disabled = true; btn.textContent = "생성 중…";
@@ -649,9 +691,12 @@ async function exportHtmlReport() {
       aud[k] = list;
     }
 
-    const comments = COMMENTS.entries
-      .filter(e => (e.account === ACCOUNT || e.account === "all") && e.since <= until && e.until >= since)
-      .sort((a, b) => b.since.localeCompare(a.since));
+    // 입력창에 쓴 코멘트를 보고서에 넣는다 (입력창 없이 호출되면 링크용으로 등록된 코멘트 사용)
+    const comments = typeof commentText === "string"
+      ? (commentText ? [{ since, until, text: commentText, updated_at: kstToday() }] : [])
+      : COMMENTS.entries
+        .filter(e => (e.account === ACCOUNT || e.account === "all") && e.since <= until && e.until >= since)
+        .sort((a, b) => b.since.localeCompare(a.since));
 
     const html = buildReportHtml({ client, scope, since, until, pSince, pUntil, c, p, campaigns, events, adsets, daily, creatives, aud, comments,
       generated: new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ") + " KST" });
@@ -1020,7 +1065,7 @@ Promise.all([getJson("data/daily.json"), getJson("data/ads.json"), getJson("data
     document.getElementById("preset").onchange = applyPreset;
     ["since", "until"].forEach(id => document.getElementById(id).onchange = () => { document.getElementById("preset").value = "custom"; render(); });
     document.getElementById("csv").onclick = downloadCsv;
-    document.getElementById("htmlReport").onclick = exportHtmlReport;
+    document.getElementById("htmlReport").onclick = openReportDialog;
     applyPreset();
   });
 }).catch(() => {
