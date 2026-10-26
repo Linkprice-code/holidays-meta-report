@@ -98,6 +98,21 @@
   .lock button { width: 100%; margin-top: 10px; padding: 10px; background: var(--accent); color: #fff; border: none; font-weight: 700; }
   .lock button:disabled { opacity: .6; cursor: wait; }
   .lock .err { color: var(--down); font-size: 12px; min-height: 18px; margin-top: 8px; }
+  /* 담당자 코멘트 (대시보드 바로 아래) */
+  .cmt { background: var(--card); border-radius: 16px; box-shadow: 0 6px 24px rgba(37,99,235,.08); margin-top: 16px; padding: 18px 20px; }
+  .cmt h2 { font-size: 15px; margin: 0 0 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cmt h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .cmt-item { border-left: 3px solid var(--accent); background: var(--soft); border-radius: 0 10px 10px 0; padding: 12px 14px; margin-bottom: 10px; }
+  .cmt-item .when { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .cmt-item .when b { color: var(--accent); font-weight: 700; }
+  .cmt-item .txt { white-space: pre-wrap; line-height: 1.7; font-size: 14px; word-break: break-word; }
+  .cmt-empty { color: var(--muted); font-size: 13px; padding: 6px 0 2px; }
+  .cmt-edit { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 14px; }
+  .cmt-edit textarea { width: 100%; min-height: 130px; font: inherit; font-size: 14px; line-height: 1.6; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; resize: vertical; }
+  .cmt-edit .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+  .cmt-edit .primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
+  .cmt-edit .msg { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .cmt-edit .msg a { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -141,6 +156,7 @@
     </div>
     <div id="content"></div>
   </div>
+  <section class="cmt" id="comments" aria-label="담당자 코멘트"></section>
   <p class="note foot">
     협력광고 계정<span class="badge">협력</span>의 구매·장바구니·전환값은 광고관리자의 <b>공유 항목 포함</b> 기준이고, 자사몰 계정은 픽셀 기준 일반 구매 지표입니다.
     증감은 선택 기간과 같은 길이의 직전 기간과 비교합니다. 행사명은 캠페인명에서 읽어옵니다.
@@ -565,6 +581,73 @@ function render() {
   if (ac) ac.onchange = () => { ADSET_CAMP[ACCOUNT] = ac.value; render(); };
   box.querySelectorAll(".minspend").forEach(s => s.onchange = () => { MIN_SPEND = +s.value; render(); });
   hydrateThumbs(box);
+  renderComments();
+}
+
+/* ---------- 담당자 코멘트 ----------
+   data/comments.json(.enc) 에 { entries: [{ since, until, account, text, updated_at }] } 로 저장.
+   보는 사람: 선택한 기간과 겹치는 코멘트를 계정별로 보여줌
+   쓰는 사람: 주소 끝에 #edit 를 붙여 열면 작성칸이 나오고, 저장 파일을 받아 저장소 data 폴더에 올림 */
+let COMMENTS = { entries: [] };
+let CMT_KEY = null;
+const EDIT_MODE = location.hash === "#edit";
+const UPLOAD_URL = "https://github.com/Linkprice-code/holidays-meta-report/upload/main/data";
+const cmtScopeName = id => id === "all" ? "전체" : (ACC[id]?.name || id);
+
+function renderComments() {
+  const box = document.getElementById("comments");
+  if (!box || !DATA) return;
+  const { since, until } = range();
+  const list = COMMENTS.entries
+    .filter(e => (e.account === ACCOUNT || e.account === "all") && e.since <= until && e.until >= since)
+    .sort((a, b) => b.since.localeCompare(a.since) || (a.account === "all") - (b.account === "all"));
+  const items = list.map(e => `<div class="cmt-item"><div class="when"><b>${e.since} ~ ${e.until}</b> · ${esc(cmtScopeName(e.account))}${e.updated_at ? ` · ${esc(e.updated_at)} 작성` : ""}</div><div class="txt">${esc(e.text)}</div></div>`).join("");
+  const head = `<h2>담당자 코멘트 <small>${since} ~ ${until} · ${esc(cmtScopeName(ACCOUNT))}</small></h2>`;
+  const body = items || `<div class="cmt-empty">선택한 기간에 등록된 코멘트가 없습니다.</div>`;
+
+  // 작성칸은 기간·계정이 바뀔 때만 새로 그려서, 탭을 눌러도 쓰던 내용이 지워지지 않게 함
+  const key = `${since}|${until}|${ACCOUNT}`;
+  if (!EDIT_MODE) { box.innerHTML = head + body; return; }
+  if (CMT_KEY === key && box.querySelector(".cmt-edit")) { box.querySelector(".cmt-list").innerHTML = body; return; }
+  CMT_KEY = key;
+  const mine = COMMENTS.entries.find(e => e.since === since && e.until === until && e.account === ACCOUNT);
+  box.innerHTML = `${head}<div class="cmt-list">${body}</div>
+    <div class="cmt-edit">
+      <label class="note" for="cmtText">이 기간(${since} ~ ${until}) · ${esc(cmtScopeName(ACCOUNT))} 코멘트 작성</label>
+      <textarea id="cmtText" placeholder="예) 10월 4주차: 넾다세일 소재 신규 투입 후 CTR 상승, 다음 주 예산 증액 검토">${esc(mine ? mine.text : "")}</textarea>
+      <div class="row">
+        <button class="primary" id="cmtSave">이 기간 코멘트 저장</button>
+        <button id="cmtDel"${mine ? "" : " disabled"}>이 기간 코멘트 삭제</button>
+        <button id="cmtFile">코멘트 저장 파일 받기</button>
+      </div>
+      <p class="msg" id="cmtMsg">저장한 내용은 아직 이 화면에만 반영됩니다. 모두에게 보이게 하려면 <b>코멘트 저장 파일 받기</b>로 받은 <code>comments.json.enc</code>를
+        <a href="${UPLOAD_URL}" target="_blank" rel="noopener">저장소 data 폴더</a>에 올리세요. 1~2분 뒤 링크에 반영됩니다.</p>
+    </div>`;
+  const msg = t => { document.getElementById("cmtMsg").innerHTML = t; };
+  document.getElementById("cmtSave").onclick = () => {
+    const text = document.getElementById("cmtText").value.trim();
+    if (!text) { msg("코멘트 내용을 입력하세요."); return; }
+    COMMENTS.entries = COMMENTS.entries.filter(e => !(e.since === since && e.until === until && e.account === ACCOUNT));
+    COMMENTS.entries.push({ since, until, account: ACCOUNT, text, updated_at: kstToday() });
+    CMT_KEY = null; renderComments();
+    msg(`저장했습니다. 이제 <b>코멘트 저장 파일 받기</b>를 눌러 파일을 <a href="${UPLOAD_URL}" target="_blank" rel="noopener">저장소 data 폴더</a>에 올리세요.`);
+  };
+  document.getElementById("cmtDel").onclick = () => {
+    COMMENTS.entries = COMMENTS.entries.filter(e => !(e.since === since && e.until === until && e.account === ACCOUNT));
+    CMT_KEY = null; renderComments();
+    msg("이 기간 코멘트를 지웠습니다. 저장 파일을 다시 받아 올려야 모두에게 반영됩니다.");
+  };
+  document.getElementById("cmtFile").onclick = async () => {
+    const plain = new TextEncoder().encode(JSON.stringify(COMMENTS));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, AES_KEY, plain));
+    const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([out], { type: "application/octet-stream" }));
+    a.download = "comments.json.enc";
+    a.click();
+    msg(`<code>comments.json.enc</code> 를 받았습니다. <a href="${UPLOAD_URL}" target="_blank" rel="noopener">저장소 data 폴더 업로드 화면</a>에 끌어다 놓고 <b>Commit changes</b>를 누르세요. 같은 이름의 기존 파일은 자동으로 바뀝니다.`);
+  };
 }
 
 function drawTraffic(cur, since, until) {
@@ -672,7 +755,8 @@ const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 async function deriveKey(pw, info) {
   const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: b64(info.salt), iterations: info.iter }, base, 512);
-  return crypto.subtle.importKey("raw", bits.slice(0, 32), "AES-GCM", false, ["decrypt"]);
+  // 코멘트 저장 파일을 만들 때 같은 키로 암호화하므로 encrypt 도 허용
+  return crypto.subtle.importKey("raw", bits.slice(0, 32), "AES-GCM", false, ["decrypt", "encrypt"]);
 }
 const decryptBuf = (key, buf) => crypto.subtle.decrypt({ name: "AES-GCM", iv: buf.slice(0, 12) }, key, buf.slice(12));
 
@@ -742,11 +826,12 @@ function askPassword() {
 }
 
 function start() {
-Promise.all([getJson("data/daily.json"), getJson("data/ads.json"), getJson("data/creatives.json")]).then(([d, ads, cre]) => {
+Promise.all([getJson("data/daily.json"), getJson("data/ads.json"), getJson("data/creatives.json"), getJson("data/comments.json")]).then(([d, ads, cre, cmt]) => {
   if (!d) throw new Error("no data");
   DATA = { ...d, rows: unpack(d) };
   ADS = ads ? unpack(ads) : [];
   CRE = cre || {};
+  COMMENTS = cmt && Array.isArray(cmt.entries) ? cmt : { entries: [] };
   // 계정 설정은 저장소의 accounts.json 을 우선 (파싱 규칙·그룹을 바꾸면 바로 반영)
   return getJson("accounts.json").then(cfg => {
     const accounts = (cfg && cfg.accounts) || d.accounts;
