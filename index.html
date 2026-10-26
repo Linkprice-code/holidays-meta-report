@@ -25,7 +25,8 @@
   select, input[type=date], button { font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 8px; }
   .hero select, .hero input, .hero button { border-color: transparent; }
   button { cursor: pointer; }
-  .hero #csv { background: rgba(255,255,255,.16); color: #fff; border: 1px solid rgba(255,255,255,.45); }
+  .hero #csv, .hero #htmlReport { background: rgba(255,255,255,.16); color: #fff; border: 1px solid rgba(255,255,255,.45); }
+  .hero #htmlReport:disabled { opacity: .6; cursor: wait; }
   .panel { background: var(--card); border-radius: 16px; box-shadow: 0 6px 24px rgba(37,99,235,.08); margin-top: -44px; position: relative; }
   .acc-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px 16px 0; }
   .tab { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); font-size: 13px; font-weight: 500; color: var(--muted); }
@@ -143,6 +144,7 @@
       </select>
       <input type="date" id="since"> <span>~</span> <input type="date" id="until">
       <button id="csv">CSV 다운로드</button>
+      <button id="htmlReport">HTML 보고서</button>
     </div>
   </div>
 </div>
@@ -584,6 +586,175 @@ function render() {
   renderComments();
 }
 
+/* ---------- HTML 보고서 내보내기 ----------
+   지금 선택한 기간·계정 기준으로 데이터와 소재 썸네일을 담은 HTML 파일 하나를 만든다 (AD-Dashboard 보고서와 같은 방식).
+   받은 파일은 비밀번호 없이 열리므로 광고주에게 그대로 보낼 수 있다 */
+async function exportHtmlReport() {
+  const btn = document.getElementById("htmlReport");
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = "생성 중…";
+  try {
+    const { since, until, pSince, pUntil } = range();
+    const client = (document.getElementById("client").textContent || "").trim() || "광고주";
+    const scope = ACCOUNT === "all" ? "전체 계정" : (ACC[ACCOUNT]?.name || ACCOUNT);
+    const inRange = (r, a, b) => between(r, a, b) && inScope(r, ACCOUNT, null);
+    const cur = DATA.rows.filter(r => inRange(r, since, until));
+    const prev = DATA.rows.filter(r => inRange(r, pSince, pUntil));
+    const c = sum(cur), p = sum(prev);
+
+    // 묶음별 표: 지출 많은 순
+    const groupRows = (rows, prows, keyFn, labelFn, limit) => {
+      const g = {}, pg = {};
+      for (const r of rows) (g[keyFn(r)] ||= []).push(r);
+      for (const r of prows) (pg[keyFn(r)] ||= []).push(r);
+      const list = Object.entries(g).map(([k, rs]) => ({ label: labelFn ? labelFn(rs[0]) : k, ...sum(rs), proas: sum(pg[k] || []).roas }))
+        .filter(x => x.spend > 0).sort((a, b) => b.spend - a.spend);
+      return limit ? list.slice(0, limit) : list;
+    };
+    const campaigns = groupRows(cur, prev, r => r.campaign_name);
+    const events = groupRows(cur, prev, r => parseName(r.campaign_name, ACC[r.account_id]).event);
+    const adsets = groupRows(cur, prev, r => r.adset_id, r => r.adset_name || r.adset_id, 20);
+
+    // 일별 추이
+    const daily = [];
+    for (let d = since; d <= until; d = addDays(d, 1)) daily.push({ date: d, ...sum(cur.filter(r => r.date === d)) });
+
+    // 소재: 같은 이미지·영상끼리 합산, 지출 많은 순 12개, 썸네일은 data URI 로 파일 안에 넣음
+    const by = {};
+    for (const r of ADS.filter(r => inRange(r, since, until))) {
+      const cr = CRE[r.ad_id] || { type: "기타", key: "a_" + r.ad_id, thumb: "" };
+      const o = (by[cr.key] ||= { type: cr.type, thumb: cr.thumb, rows: [], names: {} });
+      o.rows.push(r); o.names[r.ad_name] = (o.names[r.ad_name] || 0) + (+r.spend || 0);
+      if (!o.thumb && cr.thumb) o.thumb = cr.thumb;
+    }
+    const toDataUrl = async path => {
+      if (!path) return "";
+      const u = await thumbUrl(path);
+      if (!u) return "";
+      const blob = await (await fetch(u)).blob();
+      return await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => res(""); fr.readAsDataURL(blob); });
+    };
+    const creatives = Object.values(by).map(o => ({ ...o, ...sum(o.rows), name: Object.entries(o.names).sort((a, b) => b[1] - a[1])[0][0], ads: Object.keys(o.names).length }))
+      .filter(x => x.spend > 0).sort((a, b) => b.spend - a.spend).slice(0, 12);
+    for (const x of creatives) x.img = await toDataUrl(x.thumb);
+
+    // 연령·성별·노출위치
+    const aud = {};
+    for (const [k, file] of [["age", "age"], ["gender", "gender"], ["placement", "placement"]]) {
+      const d = await getJson(`data/bd_${file}.json`);
+      const rows = d ? unpack(d).filter(r => inRange(r, since, until)) : [];
+      const def = AUD_DIMS[k];
+      let list = groupRows(rows, [], def.key);
+      if (def.order) list.sort((a, b) => def.order.indexOf(a.label) - def.order.indexOf(b.label));
+      aud[k] = list;
+    }
+
+    const comments = COMMENTS.entries
+      .filter(e => (e.account === ACCOUNT || e.account === "all") && e.since <= until && e.until >= since)
+      .sort((a, b) => b.since.localeCompare(a.since));
+
+    const html = buildReportHtml({ client, scope, since, until, pSince, pUntil, c, p, campaigns, events, adsets, daily, creatives, aud, comments,
+      generated: new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ") + " KST" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+    a.download = `${client.replace(/\s+/g, "_")}_메타광고운영보고서_${since}~${until}.html`;
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (e) {
+    console.error("[html report]", e);
+    document.getElementById("updated").textContent = "보고서를 만들지 못했습니다. 새로고침 후 다시 시도해 주세요.";
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+function buildReportHtml(R) {
+  const pct = (a, b) => b ? (a - b) / b : null;
+  const dl = (a, b, inverse) => {
+    const d = pct(a, b);
+    if (d === null) return `<span class="flat">–</span>`;
+    if (Math.abs(d) < 0.0005) return `<span class="flat">0.0%</span>`;
+    const good = inverse ? d < 0 : d > 0;
+    return `<span class="${good ? "up" : "down"}">${d > 0 ? "▲" : "▼"} ${Math.abs(d * 100).toFixed(1)}%</span>`;
+  };
+  const kpis = [
+    ["지출", fmtW(R.c.spend), dl(R.c.spend, R.p.spend)], ["노출", fmtN(R.c.impressions), dl(R.c.impressions, R.p.impressions)],
+    ["링크 클릭", fmtN(R.c.link_clicks), dl(R.c.link_clicks, R.p.link_clicks)], ["CTR (링크)", fmtP(R.c.ctr), dl(R.c.ctr, R.p.ctr)],
+    ["CPC (링크)", fmtW(R.c.cpc), dl(R.c.cpc, R.p.cpc, true)], ["구매", fmtN(R.c.purchases), dl(R.c.purchases, R.p.purchases)],
+    ["구매전환값", fmtW(R.c.purchase_value), dl(R.c.purchase_value, R.p.purchase_value)], ["ROAS", fmtR(R.c.roas), dl(R.c.roas, R.p.roas)],
+  ].map(([l, v, d]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+  const total = R.c.spend || 1;
+  const table = (list, head, withDelta = true) => list.length ? `<div class="tw"><table><thead><tr><th>${head}</th><th>지출</th><th>비중</th><th>노출</th><th>링크클릭</th><th>CTR</th><th>구매</th><th>CPA</th><th>구매전환값</th><th>ROAS</th>${withDelta ? "<th>ROAS 증감</th>" : ""}</tr></thead><tbody>${
+    list.map(x => `<tr><td>${esc(x.label)}</td><td>${fmtW(x.spend)}</td><td>${fmtS(x.spend / total)}</td><td>${fmtN(x.impressions)}</td><td>${fmtN(x.link_clicks)}</td><td>${fmtP(x.ctr)}</td><td>${fmtN(x.purchases)}</td><td>${fmtW(x.cpa)}</td><td>${fmtW(x.purchase_value)}</td><td>${fmtR(x.roas)}</td>${withDelta ? `<td>${dl(x.roas, x.proas)}</td>` : ""}</tr>`).join("")
+  }</tbody></table></div>` : `<p class="empty">선택한 기간에 데이터가 없습니다.</p>`;
+  const audTable = (list, head) => list.length ? `<div class="tw"><table><thead><tr><th>${head}</th><th>지출</th><th>비중</th><th>노출</th><th>링크클릭</th><th>CTR</th><th>구매</th><th>ROAS</th></tr></thead><tbody>${
+    list.map(x => `<tr><td>${esc(x.label)}</td><td>${fmtW(x.spend)}</td><td>${fmtS(x.spend / (list.reduce((t, y) => t + y.spend, 0) || 1))}</td><td>${fmtN(x.impressions)}</td><td>${fmtN(x.link_clicks)}</td><td>${fmtP(x.ctr)}</td><td>${fmtN(x.purchases)}</td><td>${fmtR(x.roas)}</td></tr>`).join("")
+  }</tbody></table></div>` : `<p class="empty">데이터가 없습니다.</p>`;
+  const cards = R.creatives.length ? `<div class="cr">${R.creatives.map((x, i) => `<div class="cc"><div class="rk">${i + 1}</div>${x.img ? `<img src="${x.img}" alt="">` : `<div class="noimg">이미지 없음</div>`}<div class="cb"><div class="cn">${esc(x.name)}</div><div class="ct">${esc(x.type)}${x.ads > 1 ? ` · 광고 ${x.ads}개 합산` : ""}</div><div class="cm">지출 <b>${fmtW(x.spend)}</b><br>ROAS <b>${fmtR(x.roas)}</b> · 구매 ${fmtN(x.purchases)}<br>CTR ${fmtP(x.ctr)}</div></div></div>`).join("")}</div>` : `<p class="empty">선택한 기간에 소재 데이터가 없습니다.</p>`;
+  const cmts = R.comments.length ? R.comments.map(e => `<div class="cmt"><div class="cw">${e.since} ~ ${e.until}${e.updated_at ? ` · ${esc(e.updated_at)} 작성` : ""}</div><div class="cx">${esc(e.text)}</div></div>`).join("") : `<p class="empty">이 기간에 등록된 코멘트가 없습니다.</p>`;
+  const chartData = JSON.stringify({ labels: R.daily.map(d => d.date.slice(5)), spend: R.daily.map(d => Math.round(d.spend)), value: R.daily.map(d => Math.round(d.purchase_value)) }).replace(/</g, "\\u003c");
+  return `<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(R.client)} 메타 광고 운영 보고서 (${R.since} ~ ${R.until})</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"><\/script>
+<style>
+  :root { --bg: #f3f6fc; --card: #fff; --ink: #14213d; --muted: #66728a; --line: #e2e8f4; --soft: #f5f8ff; --accent: #2563eb; --up: #0f9d6a; --down: #e0473c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Noto Sans KR", system-ui, sans-serif; font-size: 14px; }
+  .hero { background: linear-gradient(120deg, #1d4ed8 0%, #2563eb 45%, #4f8ff7 100%); color: #fff; padding: 28px 16px 26px; }
+  .w { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+  .hero h1 { margin: 0; font-size: 24px; letter-spacing: -0.02em; }
+  .hero .meta { margin-top: 8px; font-size: 13px; color: rgba(255,255,255,.88); line-height: 1.7; }
+  section { background: var(--card); border-radius: 14px; box-shadow: 0 4px 18px rgba(37,99,235,.07); padding: 18px; margin-top: 16px; }
+  h2 { font-size: 16px; margin: 0 0 12px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+  h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  @media (max-width: 760px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+  .kpi { background: var(--soft); border-radius: 10px; padding: 12px 14px; border-top: 3px solid #3b82f6; }
+  .kpi .l { color: var(--muted); font-size: 12px; } .kpi .v { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; } .kpi .d { font-size: 12px; margin-top: 2px; }
+  .up { color: var(--up); } .down { color: var(--down); } .flat { color: var(--muted); }
+  .chart { position: relative; height: 260px; }
+  .tw { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-size: 13px; }
+  th { background: var(--soft); color: var(--muted); font-weight: 500; font-size: 12px; }
+  th:first-child, td:first-child { text-align: left; white-space: normal; min-width: 140px; }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; } @media (max-width: 900px) { .duo { grid-template-columns: 1fr; } }
+  .cr { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; } @media (max-width: 900px) { .cr { grid-template-columns: repeat(2, 1fr); } }
+  .cc { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; position: relative; }
+  .cc img, .cc .noimg { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: var(--soft); }
+  .cc .noimg { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
+  .cc .rk { position: absolute; top: 8px; left: 8px; background: var(--accent); color: #fff; width: 24px; height: 24px; border-radius: 50%; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .cb { padding: 10px; } .cn { font-size: 12px; font-weight: 700; word-break: break-all; } .ct { font-size: 11px; color: var(--muted); margin: 2px 0 6px; } .cm { font-size: 12px; line-height: 1.6; } .cm b { color: var(--accent); }
+  .cmt { border-left: 3px solid var(--accent); background: var(--soft); border-radius: 0 10px 10px 0; padding: 12px 14px; margin-bottom: 10px; }
+  .cw { font-size: 12px; color: var(--muted); margin-bottom: 6px; } .cx { white-space: pre-wrap; line-height: 1.7; word-break: break-word; }
+  .empty { color: var(--muted); font-size: 13px; margin: 4px 0; }
+  .foot { color: var(--muted); font-size: 12px; line-height: 1.7; padding: 16px 4px 40px; }
+</style></head><body>
+<div class="hero"><div class="w"><h1>${esc(R.client)} 메타 광고 운영 보고서</h1>
+<div class="meta">분석 기간 <b>${R.since} ~ ${R.until}</b> · 비교 기간 ${R.pSince} ~ ${R.pUntil} · ${esc(R.scope)}<br>작성 ${R.generated}</div></div></div>
+<div class="w">
+  <section><h2>핵심 성과 <small>비교 기간 대비 증감</small></h2><div class="kpis">${kpis}</div></section>
+  <section><h2>담당자 코멘트</h2>${cmts}</section>
+  <section><h2>일별 추이 <small>지출 vs 구매전환값</small></h2><div class="chart"><canvas id="trend"></canvas></div></section>
+  <section><h2>캠페인별 성과</h2>${table(R.campaigns, "캠페인")}</section>
+  <section><h2>행사명별 성과</h2>${table(R.events, "행사명")}</section>
+  <section><h2>소재 성과 <small>지출 상위 ${R.creatives.length}개 · 같은 이미지·영상은 합산</small></h2>${cards}</section>
+  <section><h2>광고세트별 성과 <small>지출 상위 20개</small></h2>${table(R.adsets, "광고세트")}</section>
+  <section><h2>타겟 분석</h2><div class="duo"><div>${audTable(R.aud.age, "연령")}</div><div>${audTable(R.aud.gender, "성별")}</div></div><div style="margin-top:16px">${audTable(R.aud.placement, "노출위치")}</div></section>
+  <p class="foot">협력광고 계정의 구매·전환값은 광고관리자의 공유 항목 포함 기준입니다. 증감은 선택 기간과 같은 길이의 직전 기간과 비교했습니다. 이 파일은 작성 시점의 데이터로 만든 보고서이며 이후 자동으로 갱신되지 않습니다.</p>
+</div>
+<script>
+const D = ${chartData};
+if (window.Chart) new Chart(document.getElementById("trend"), { data: { labels: D.labels, datasets: [
+  { type: "bar", label: "지출", data: D.spend, backgroundColor: "#9cc0fb", yAxisID: "y", borderRadius: 4 },
+  { type: "line", label: "구매전환값", data: D.value, borderColor: "#1d4ed8", backgroundColor: "#1d4ed8", yAxisID: "y1", tension: .3 } ] },
+  options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "top" } },
+    scales: { y: { position: "left", ticks: { callback: v => (v / 10000) + "만" } }, y1: { position: "right", grid: { drawOnChartArea: false }, ticks: { callback: v => (v / 10000) + "만" } } } } });
+<\/script>
+</body></html>`;
+}
+
 /* ---------- 담당자 코멘트 ----------
    data/comments.json(.enc) 에 { entries: [{ since, until, account, text, updated_at }] } 로 저장.
    보는 사람: 선택한 기간과 겹치는 코멘트를 계정별로 보여줌
@@ -849,6 +1020,7 @@ Promise.all([getJson("data/daily.json"), getJson("data/ads.json"), getJson("data
     document.getElementById("preset").onchange = applyPreset;
     ["since", "until"].forEach(id => document.getElementById(id).onchange = () => { document.getElementById("preset").value = "custom"; render(); });
     document.getElementById("csv").onclick = downloadCsv;
+    document.getElementById("htmlReport").onclick = exportHtmlReport;
     applyPreset();
   });
 }).catch(() => {
