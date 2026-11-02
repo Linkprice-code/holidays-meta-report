@@ -731,9 +731,15 @@ function buildReportHtml(R) {
   const table = (list, head, withDelta = true) => list.length ? `<div class="tw"><table><thead><tr><th>${head}</th><th>지출</th><th>비중</th><th>노출</th><th>링크클릭</th><th>CTR</th><th>구매</th><th>CPA</th><th>구매전환값</th><th>ROAS</th>${withDelta ? "<th>ROAS 증감</th>" : ""}</tr></thead><tbody>${
     list.map(x => `<tr><td>${esc(x.label)}</td><td>${fmtW(x.spend)}</td><td>${fmtS(x.spend / total)}</td><td>${fmtN(x.impressions)}</td><td>${fmtN(x.link_clicks)}</td><td>${fmtP(x.ctr)}</td><td>${fmtN(x.purchases)}</td><td>${fmtW(x.cpa)}</td><td>${fmtW(x.purchase_value)}</td><td>${fmtR(x.roas)}</td>${withDelta ? `<td>${dl(x.roas, x.proas)}</td>` : ""}</tr>`).join("")
   }</tbody></table></div>` : `<p class="empty">선택한 기간에 데이터가 없습니다.</p>`;
-  const audTable = (list, head) => list.length ? `<div class="tw"><table><thead><tr><th>${head}</th><th>지출</th><th>비중</th><th>노출</th><th>링크클릭</th><th>CTR</th><th>구매</th><th>ROAS</th></tr></thead><tbody>${
-    list.map(x => `<tr><td>${esc(x.label)}</td><td>${fmtW(x.spend)}</td><td>${fmtS(x.spend / (list.reduce((t, y) => t + y.spend, 0) || 1))}</td><td>${fmtN(x.impressions)}</td><td>${fmtN(x.link_clicks)}</td><td>${fmtP(x.ctr)}</td><td>${fmtN(x.purchases)}</td><td>${fmtR(x.roas)}</td></tr>`).join("")
-  }</tbody></table></div>` : `<p class="empty">데이터가 없습니다.</p>`;
+  // 타겟 표: 비중은 막대로, 지출 비중 5% 이상 중 ROAS 최고 행은 강조
+  const audTable = (list, head) => {
+    if (!list.length) return `<h3>${head}별</h3><p class="empty">데이터가 없습니다.</p>`;
+    const sum = list.reduce((t, y) => t + y.spend, 0) || 1;
+    const best = list.filter(x => x.spend / sum >= 0.05 && x.purchases > 0).sort((a, b) => b.roas - a.roas)[0];
+    return `<h3>${head}별</h3><div class="tw"><table class="aud"><thead><tr><th>${head}</th><th>지출</th><th class="sh">비중</th><th>CTR</th><th>구매</th><th>ROAS</th></tr></thead><tbody>${
+      list.map(x => { const s = x.spend / sum; return `<tr${x === best ? ' class="best"' : ""}><td>${esc(x.label)}</td><td>${fmtW(x.spend)}<div class="sub">노출 ${fmtN(x.impressions)} · 클릭 ${fmtN(x.link_clicks)}</div></td><td class="sh"><div class="shr"><div class="bar"><i style="width:${(s * 100).toFixed(1)}%"></i></div><span>${fmtS(s)}</span></div></td><td>${fmtP(x.ctr)}</td><td>${fmtN(x.purchases)}</td><td><b>${fmtR(x.roas)}</b></td></tr>`; }).join("")
+    }</tbody></table></div>`;
+  };
   const cards = R.creatives.length ? `<div class="cr">${R.creatives.map((x, i) => `<div class="cc"><div class="rk">${i + 1}</div>${x.img ? `<img src="${x.img}" alt="">` : `<div class="noimg">이미지 없음</div>`}<div class="cb"><div class="cn">${esc(x.name)}</div><div class="ct">${esc(x.type)}${x.ads > 1 ? ` · 광고 ${x.ads}개 합산` : ""}</div><div class="cm">지출 <b>${fmtW(x.spend)}</b><br>ROAS <b>${fmtR(x.roas)}</b> · 구매 ${fmtN(x.purchases)}<br>CTR ${fmtP(x.ctr)}</div></div></div>`).join("")}</div>` : `<p class="empty">선택한 기간에 소재 데이터가 없습니다.</p>`;
   const cmts = R.comments.length ? R.comments.map(e => `<div class="cmt"><div class="cw">${e.since} ~ ${e.until}${e.updated_at ? ` · ${esc(e.updated_at)} 작성` : ""}</div><div class="cx">${esc(e.text)}</div></div>`).join("") : `<p class="empty">이 기간에 등록된 코멘트가 없습니다.</p>`;
   const chartData = JSON.stringify({ labels: R.daily.map(d => d.date.slice(5)), spend: R.daily.map(d => Math.round(d.spend)), value: R.daily.map(d => Math.round(d.purchase_value)) }).replace(/</g, "\\u003c");
@@ -764,7 +770,18 @@ function buildReportHtml(R) {
   th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-size: 13px; }
   th { background: var(--soft); color: var(--muted); font-weight: 500; font-size: 12px; }
   th:first-child, td:first-child { text-align: left; white-space: normal; min-width: 140px; }
-  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; } @media (max-width: 900px) { .duo { grid-template-columns: 1fr; } }
+  .duo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; } .duo > div { min-width: 0; } @media (max-width: 900px) { .duo { grid-template-columns: minmax(0, 1fr); } }
+  h3 { font-size: 13px; margin: 0 0 8px; color: var(--ink); }
+  table.aud th, table.aud td { padding: 8px 8px; }
+  table.aud th:first-child, table.aud td:first-child { min-width: 64px; white-space: nowrap; }
+  table.aud td { vertical-align: top; }
+  table.aud .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  table.aud .sh { width: 130px; }
+  table.aud .shr { display: flex; align-items: center; gap: 8px; justify-content: flex-end; } table.aud .shr span { min-width: 42px; }
+  table.aud .bar { flex: 1; min-width: 50px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  table.aud .bar i { display: block; height: 100%; background: #3b82f6; border-radius: 3px; }
+  table.aud tr.best td { background: #eefaf4; } table.aud tr.best td:last-child b { color: var(--up); }
+  .aud-note { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
   .cr { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; } @media (max-width: 900px) { .cr { grid-template-columns: repeat(2, 1fr); } }
   .cc { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; position: relative; }
   .cc img, .cc .noimg { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: var(--soft); }
@@ -786,7 +803,7 @@ function buildReportHtml(R) {
   <section><h2>행사명별 성과</h2>${table(R.events, "행사명")}</section>
   <section><h2>소재 성과 <small>지출 상위 ${R.creatives.length}개 · 같은 이미지·영상은 합산</small></h2>${cards}</section>
   <section><h2>광고세트별 성과 <small>지출 상위 20개</small></h2>${table(R.adsets, "광고세트")}</section>
-  <section><h2>타겟 분석</h2><div class="duo"><div>${audTable(R.aud.age, "연령")}</div><div>${audTable(R.aud.gender, "성별")}</div></div><div style="margin-top:16px">${audTable(R.aud.placement, "노출위치")}</div></section>
+  <section><h2>타겟 분석</h2><div class="duo"><div>${audTable(R.aud.age, "연령")}</div><div>${audTable(R.aud.gender, "성별")}</div></div><div style="margin-top:20px">${audTable(R.aud.placement, "노출위치")}</div><p class="aud-note">초록색 행은 지출 비중 5% 이상 중 ROAS가 가장 높은 구간입니다.</p></section>
   <p class="foot">협력광고 계정의 구매·전환값은 광고관리자의 공유 항목 포함 기준입니다. 증감은 선택 기간과 같은 길이의 직전 기간과 비교했습니다. 이 파일은 작성 시점의 데이터로 만든 보고서이며 이후 자동으로 갱신되지 않습니다.</p>
 </div>
 <script>
